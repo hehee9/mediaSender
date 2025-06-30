@@ -45,7 +45,7 @@ const multiTask = require("multiTask");
 
 ### 2. 모듈 가져오기
 ```javascript
-const MediaSender = require("./mediaSender");
+const MediaSender = require("mediaSender");
 ```
 
 ### 3. 사용 예시
@@ -53,7 +53,7 @@ const MediaSender = require("./mediaSender");
 #### 단일 파일 전송
 ```javascript
 // 로컬 파일 전송
-MediaSender.send(channelId, "/sdcard/Pictures/image.jpg");
+MediaSender.send(channelId, "sdcard/Pictures/image.jpg");
 
 // 온라인 파일 전송
 MediaSender.send(channelId, "https://example.com/image.jpg");
@@ -62,9 +62,9 @@ MediaSender.send(channelId, "https://example.com/image.jpg");
 #### 다중 파일 전송
 ```javascript
 const files = [
-    "/sdcard/Pictures/image1.jpg",
+    "sdcard/Pictures/image1.jpg",
     "https://example.com/image2.jpg",
-    "/sdcard/Documents/document.pdf"
+    "sdcard/Documents/document.pdf"
 ];
 MediaSender.send(channelId, files);
 ```
@@ -93,6 +93,7 @@ mp4, m4v, avi, asf, wmv, mkv, ts, mpg, mpeg, mov, flv, ogv
 
 ### 음성
 mp3, wav, flac, tta, tak, aac, wma, ogg, m4a
+* 오디오 파일은 Multiple로 전송 시 첨부파일이 아닌 음성 메시지로 전송됩니다.
 
 ### 문서
 doc, docx, hwp, txt, rtf, xml, pdf, wks, xps, md, odf, odt, ods, odp, csv, tsv, xls, xlsx, ppt, pptx, pages, key, numbers, show, ce
