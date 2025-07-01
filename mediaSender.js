@@ -5,11 +5,14 @@
  * @author Hehee
  * @license CC BY-NC-SA 4.0
  * @since 2025.02.19
- * @version 1.2.1
+ * @version 1.2.2
  */
 
 /**
  * @changeLog
+ * v1.2.2 (2025.07.01)
+ * - 일부 mp3 파일을 제대로 인식하지 못하는 문제 수정
+ * 
  * v1.2.1 (2025.07.01)
  * - 확장자 추출 로직 개선 (화이트리스트 기반 검증)
  * - URL에서 확장자 추출 불가 시, 파일 시그니처 분석으로 확장자 추측 기능 추가
@@ -116,6 +119,10 @@
         { exts: ['ts'], sig: [0x47] },
         { exts: ['ogg', 'ogv'], sig: [0x4F, 0x67, 0x67, 0x53] },
         { exts: ['mp3'], sig: [0x49, 0x44, 0x33] },
+        { exts: ['mp3'], sig: [0xFF, 0xFB] },
+        { exts: ['mp3'], sig: [0xFF, 0xFA] },
+        { exts: ['mp3'], sig: [0xFF, 0xF3] },
+        { exts: ['mp3'], sig: [0xFF, 0xF2] },
         { exts: ['flac'], sig: [0x66, 0x4C, 0x61, 0x43] },
         { exts: ['aac'], sig: [0xFF, 0xF1] }
     ];
@@ -152,6 +159,7 @@
      */
     function guessFileTypeFromBytes(bytes) {
         if (!bytes || bytes.length === 0) return null;
+        
         for (let i = 0; i < SIGNATURES.length; i++) {
             let type = SIGNATURES[i];
             let { sig, offset = 0, secondarySig, secondaryOffset = 0 } = type;
