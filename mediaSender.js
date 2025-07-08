@@ -5,11 +5,17 @@
  * @author Hehee
  * @license CC BY-NC-SA 4.0
  * @since 2025.02.19
- * @version 1.2.2
+ * @version 1.2.4
  */
 
 /**
  * @changeLog
+ * v1.2.4 (2025.07.09)
+ * - 파일 경로 문자열 변환 오류 수정 (java.lang.String -> JS String 항상 변환)
+ * 
+ * v1.2.3 (2025.07.02)
+ * - 텍스트 기반 파일이 전송되지 않는 문제 수정
+ * 
  * v1.2.2 (2025.07.01)
  * - 일부 mp3 파일을 제대로 인식하지 못하는 문제 수정
  * 
@@ -98,6 +104,7 @@
         { exts: ['tif', 'tiff'], sig: [0x49, 0x49, 0x2A, 0x00] },
         { exts: ['tif', 'tiff'], sig: [0x4D, 0x4D, 0x00, 0x2A] },
         { exts: ['psd'], sig: [0x38, 0x42, 0x50, 0x53] },
+        { exts: ['ai'], sig: [0x25, 0x21] },
         { exts: ['pdf'], sig: [0x25, 0x50, 0x44, 0x46] },
         { exts: ['hwp'], sig: [0x48, 0x57, 0x50, 0x20, 0x44, 0x6F, 0x63, 0x75, 0x6D, 0x65, 0x6E, 0x74, 0x20, 0x46, 0x69, 0x6C, 0x65] },
         { exts: ['doc', 'xls', 'ppt'], sig: [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1] },
@@ -232,6 +239,7 @@
      */
     function getFileExtension(filePath) {
         try {
+            filePath = String(filePath); // java.lang.String -> JS String으로 변환
             const url = new CONFIG.URL(filePath);
             let path = url.getPath();
             let lastDotInPath = path.lastIndexOf(".");
@@ -349,12 +357,14 @@
         let intent = new CONFIG.Intent(action);
         intent.setPackage("com.kakao.talk");
         intent.setType(mimeType);
+
         const extraKey = CONFIG.Intent.EXTRA_STREAM;
         if (action === CONFIG.Intent.ACTION_SEND_MULTIPLE) {
             intent.putParcelableArrayListExtra(extraKey, streamData);
         } else {
             intent.putExtra(extraKey, streamData);
         }
+
         let channelIdLong = new CONFIG.Long(channelId.toString());
         intent.putExtra("key_id", channelIdLong);
         intent.putExtra("key_type", new CONFIG.Integer(1));
@@ -399,8 +409,17 @@
                 if (result.downloaded) downloadedFiles.push(result.localPath);
                 let file = new CONFIG.File(result.localPath);
                 let uri = CONFIG.FileProvider.getUriForFile(context, FILE_PROVIDER_AUTHORITY, file);
-                let intent = createSendIntent(CONFIG.Intent.ACTION_SEND, channelId, result.mime, uri);
-                context.startActivity(intent);
+
+                // 텍스트 기반 파일은 */* 및 ACTION_SEND_MULTIPLE로 전송해야 보내짐
+                if (result.mime.startsWith("text/")) {
+                    let uriList = new CONFIG.ArrayList();
+                    uriList.add(uri);
+                    let intent = createSendIntent(CONFIG.Intent.ACTION_SEND_MULTIPLE, channelId, "*/*", uriList);
+                    context.startActivity(intent);
+                } else {
+                    let intent = createSendIntent(CONFIG.Intent.ACTION_SEND, channelId, result.mime, uri);
+                    context.startActivity(intent);
+                }
             }
 
             setTimeout(() => {
