@@ -5,11 +5,15 @@
  * @author Hehee
  * @license CC BY-NC-SA 4.0
  * @since 2025.02.19
- * @version 1.3.0
+ * @version 1.3.1
  */
 
 /**
  * @changeLog
+ * v1.3.1 (2025.07.25)
+ * - '다른 앱 위에 표시' 권한 확인 추가
+ * - 권한이 없을 경우 로그에 권한 요청 메시지 추가
+ * 
  * v1.3.0 (2025.07.25)
  * - multiTask 모듈 의존성을 필수 -> 권장으로 변경
  * - multiTask 모듈이 없을 경우, 파일 다운로드를 동기적으로 처리하도록 수정
@@ -58,7 +62,8 @@
         Integer: Packages.java.lang.Integer,
         MediaScannerConnection: Packages.android.media.MediaScannerConnection,
         FileProvider: Packages.androidx.core.content.FileProvider,
-        ArrayList: Packages.java.util.ArrayList
+        ArrayList: Packages.java.util.ArrayList,
+        Settings: Packages.android.provider.Settings
     };
 
     const FILE_PROVIDER_AUTHORITY = "com.xfl.msgbot.provider";
@@ -156,6 +161,12 @@
     } catch (e) {
         Log.e(`multiTask 모듈 설치를 권장합니다.\nhttps://cafe.naver.com/nameyee/50218`);
     }
+
+    const hasDrawOverlaysPermission = CONFIG.Settings.canDrawOverlays(context);
+    if (!hasDrawOverlaysPermission) {
+        Log.e("'다른 앱 위에 표시' 권한이 없습니다.\n권한이 없을 경우 메신저봇 앱을 띄워둘 때에만 파일 전송이 가능합니다.\n설정에서 권한을 허용해주세요.");
+    }
+
     const MediaSender = {};
 
     /**
