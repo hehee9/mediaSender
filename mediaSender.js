@@ -5,11 +5,19 @@
  * @author Hehee
  * @license CC BY-NC-SA 4.0
  * @since 2025.02.19
- * @version 1.2.4
+ * @version 1.3.0
  */
 
 /**
  * @changeLog
+ * v1.3.0 (2025.07.25)
+ * - multiTask 모듈 의존성을 필수 -> 권장으로 변경
+ * - multiTask 모듈이 없을 경우, 파일 다운로드를 동기적으로 처리하도록 수정
+ * - 동일 url 입력 시 캐싱
+ * 
+ * v1.2.5 (2025.07.14)
+ * - 메신저봇 v0.7.34a에서도 지원하도록 수정
+ * 
  * v1.2.4 (2025.07.09)
  * - 파일 경로 문자열 변환 오류 수정 (java.lang.String -> JS String 항상 변환)
  * 
@@ -142,7 +150,12 @@
     }
 
     /** @see https://cafe.naver.com/nameyee/50218 */
-    const multiTask = require("multiTask");
+    let multiTask = null;
+    try {
+        multiTask = require("multiTask");
+    } catch (e) {
+        Log.e(`multiTask 모듈 설치를 권장합니다.\nhttps://cafe.naver.com/nameyee/50218`);
+    }
     const MediaSender = {};
 
     /**
@@ -169,7 +182,11 @@
         
         for (let i = 0; i < SIGNATURES.length; i++) {
             let type = SIGNATURES[i];
-            let { sig, offset = 0, secondarySig, secondaryOffset = 0 } = type;
+            let sig = type.sig;
+            let offset = type.offset || 0;
+            let secondarySig = type.secondarySig;
+            let secondaryOffset = type.secondaryOffset || 0;
+
             if (bytes.length < offset + sig.length) continue;
             let primaryMatch = true;
             for (let j = 0; j < sig.length; j++) {
@@ -279,9 +296,34 @@
         return "jpg";
     }
 
+    /**
+     * @description 파일 경로에서 파일명만 추출
+     * @param {string} filePath 파일 경로
+     * @returns {string} 파일명
+     */
+    function getFileName(filePath) {
+        filePath = String(filePath);
+        let pathWithoutQuery = filePath.split('?')[0].split('#')[0];
+        let lastSlash = pathWithoutQuery.lastIndexOf("/");
+        if (lastSlash !== -1 && lastSlash < pathWithoutQuery.length - 1) {
+            return pathWithoutQuery.substring(lastSlash + 1);
+        }
+        return pathWithoutQuery;
+    }
+
     /** @description 파일 확장자에 따른 MIME 타입 반환 */
     function getMimeType(ext) {
         return MIME_MAP[ext.toLowerCase()] || "application/octet-stream";
+    }
+
+    /**
+     * @description 파일명 유효성 검사 (윈도우/안드로이드 금지문자)
+     * @param {string} fileName 검사할 파일명
+     * @returns {boolean} 유효하면 true, 아니면 false
+     */
+    function isValidFileName(fileName) {
+        // \/ : * ? " < > | 및 널문자, .., . 등도 제한
+        return /^[^\\/:*?"<>|\0]+$/.test(fileName) && fileName !== '.' && fileName !== '..';
     }
 
     /**
@@ -290,23 +332,41 @@
      * @param {string} folder 파일 저장 폴더
      * @param {number} timeout 다운로드 타임아웃 (ms)
      * @param {number} [index] 파일명 중복 방지용 인덱스
+     * @param {string} [fileName] 저장할 파일명(옵션)
      * @returns {Object} { localPath: string, mime: string, downloaded: boolean }
      * @throws {Error} 로컬 파일 존재하지 않을 때
      */
-    function prepareFile(filePath, folder, timeout, index) {
+    function prepareFile(filePath, folder, timeout, index, fileName) {
         let localPath = filePath;
         let ext = "";
         let mime = "";
         let downloaded = false;
         let isLocal = /^\/?(sdcard\/|storage\/emulated\/0\/)/.test(filePath);
 
-        if (!isLocal) {
+        // 파일명 강제 지정 시 확장자 자동 보정
+        let customFileName = null;
+        if (fileName) {
+            if (!isValidFileName(fileName)) {
+                throw new Error("잘못된 파일명: " + fileName);
+            }
+            // 확장자 붙어있는지 확인, 없으면 자동 추가
             ext = getFileExtension(filePath);
+            if (!fileName.toLowerCase().endsWith('.' + ext)) {
+                customFileName = fileName + '.' + ext;
+            } else {
+                customFileName = fileName;
+            }
+        }
+
+        if (!isLocal) {
+            ext = ext || getFileExtension(filePath);
             mime = getMimeType(ext);
             let timestamp = Date.now();
-            localPath = (typeof index !== "undefined") ?
-                `${folder}${timestamp}_${index}.${ext}` :
-                `${folder}${timestamp}.${ext}`;
+            localPath = customFileName ?
+                (folder + customFileName) :
+                ((typeof index !== "undefined") ?
+                    `${folder}${timestamp}_${index}.${ext}` :
+                    `${folder}${timestamp}.${ext}`);
 
             let file = new CONFIG.File(localPath);
             let parentDir = file.getParentFile();
@@ -336,10 +396,34 @@
             }
             if (downloaded) scanMedia(localPath);
         } else {
-            ext = getFileExtension(filePath);
+            ext = ext || getFileExtension(filePath);
             mime = getMimeType(ext);
             if (!new CONFIG.File(localPath).exists())
                 throw new Error("파일이 없음: " + localPath);
+            // 원본 파일명을 유지하여 임시 폴더로 복사 (fileName 있으면 그 이름으로 복사)
+            let fileNameToUse = customFileName ? customFileName : getFileName(filePath);
+            let targetPath = folder + fileNameToUse;
+            if (localPath !== targetPath) {
+                let srcFile = new CONFIG.File(localPath);
+                let destFile = new CONFIG.File(targetPath);
+                let parentDir = destFile.getParentFile();
+                if (!parentDir.exists()) parentDir.mkdirs();
+                // 파일 복사
+                let fis = null, fos = null;
+                try {
+                    fis = new java.io.FileInputStream(srcFile);
+                    fos = new java.io.FileOutputStream(destFile);
+                    let buffer = java.lang.reflect.Array.newInstance(java.lang.Byte.TYPE, 4096);
+                    let bytesRead;
+                    while ((bytesRead = fis.read(buffer)) !== -1)
+                        fos.write(buffer, 0, bytesRead);
+                } finally {
+                    if (fos) fos.close();
+                    if (fis) fis.close();
+                }
+                localPath = targetPath;
+                downloaded = true; // 복사도 downloaded로 간주
+            }
             scanMedia(localPath);
         }
         return { localPath, mime, downloaded };
@@ -378,20 +462,47 @@
      * @param {string|bigint} channelId 전송할 채널 ID
      * @param {string|string[]} path 전송할 파일 경로 | 파일 경로 배열
      * @param {number} [timeout] 다운로드 타임아웃 (ms)
+     * @param {string} [fileName] 저장할 파일명(옵션)
      * @returns {boolean} 전송 성공 여부
      */
-    MediaSender.send = (channelId, path, timeout) => {
+    MediaSender.send = (channelId, path, timeout, fileName) => {
         try {
             let folder = "sdcard/botData/tmp/";
             timeout = timeout || 30000;
             let downloadedFiles = [];
 
             if (Array.isArray(path)) {
-                let tasks = [];
-                for (let i = 0; i < path.length; i++) {
-                    tasks.push([prepareFile, path[i], folder, timeout, i]);
+                let results = [];
+                let cacheMap = {};
+                let uniquePaths = [];
+                // 중복 URL 제거하여 캐싱
+                for (let p of path) {
+                    if (cacheMap[p] === undefined) {
+                        cacheMap[p] = uniquePaths.length;
+                        uniquePaths.push(p);
+                    }
                 }
-                let results = multiTask.run(tasks, timeout);
+                // 파일 준비 (중복 제거된 목록)
+                let uniqueResults = [];
+
+                // multiTask 모듈이 있으면 비동기로 처리, 없으면 동기로 처리
+                if (multiTask) {
+                    let tasks = [];
+                    for (let j = 0; j < uniquePaths.length; j++) {
+                        tasks.push([prepareFile, uniquePaths[j], folder, timeout, j, fileName]);
+                    }
+                    uniqueResults = multiTask.run(tasks, timeout);
+                } else {
+                    for (let j = 0; j < uniquePaths.length; j++) {
+                        uniqueResults.push(prepareFile(uniquePaths[j], folder, timeout, j, fileName));
+                    }
+                }
+                
+                for (let p of path) {
+                    let idx = cacheMap[p];
+                    results.push(uniqueResults[idx]);
+                }
+
                 let uriList = new CONFIG.ArrayList();
                 for (let result of results) {
                     if (result) {
@@ -405,7 +516,7 @@
                 let intent = createSendIntent(CONFIG.Intent.ACTION_SEND_MULTIPLE, channelId, "*/*", uriList);
                 context.startActivity(intent);
             } else {
-                let result = prepareFile(path, folder, timeout);
+                let result = prepareFile(path, folder, timeout, undefined, fileName);
                 if (result.downloaded) downloadedFiles.push(result.localPath);
                 let file = new CONFIG.File(result.localPath);
                 let uri = CONFIG.FileProvider.getUriForFile(context, FILE_PROVIDER_AUTHORITY, file);
