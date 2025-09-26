@@ -1,10 +1,11 @@
 # MediaSender
 
-카카오톡 메시지봇용 파일 전송 모듈
+카카오톡 메신저봇R용 파일 전송 모듈
 
 ## 개요
 
 MediaSender는 카카오톡 메시지봇에서 파일을 전송하기 위한 JavaScript 모듈입니다. 이미지, 동영상, 문서 등 다양한 파일 형식을 지원하며, 온라인 URL에서 파일을 다운로드하여 전송할 수도 있습니다.
+
 
 ## 주요 기능
 
@@ -16,7 +17,94 @@ MediaSender는 카카오톡 메시지봇에서 파일을 전송하기 위한 Jav
 - ✅ 자동 미디어 스캔 및 임시 파일 정리
 - ✅ 메모리 누수 방지
 
+
+## 설치 및 사용법
+
+### 1. 의존성 (추천, 필수 아님)
+```javascript
+const multiTask = require("multiTask");
+```
+
+### 2. 모듈 가져오기
+```javascript
+const MediaSender = require("mediaSender");
+```
+
+### 3. 사용 예시
+
+#### 단일 파일 전송
+```javascript
+// 로컬 파일 전송
+MediaSender.send(channelId, "sdcard/Pictures/image.jpg");
+
+// 온라인 파일 전송
+MediaSender.send(channelId, "https://example.com/image.jpg");
+
+// base64 / Java 바이트 배열 파일 전송
+MediaSender.send(channelId, "data:image/png;base64;...");
+```
+
+#### 다중 파일 전송
+```javascript
+const files = [
+    "sdcard/Pictures/image1.jpg",
+    "https://example.com/image2.jpg",
+    "sdcard/Documents/document.pdf"
+];
+MediaSender.send(channelId, files);
+```
+
+
+## API 참조
+
+### `MediaSender.send(channelId, path, timeout, fileName, saveCache)`
+
+파일을 지정된 채널에 전송합니다.
+
+#### 매개변수
+- `channelId` (string|bigint): 전송할 채널 ID
+- `path` (string|string[]): 전송할 파일 경로 또는 파일 경로 배열
+- `timeout` (number, 선택사항): 다운로드 타임아웃 (기본값: 30000ms)
+- `fileName` (string, 선택사항): 파일명을 지정합니다
+- `saveCache` (boolean, 선택사항): 내장 경로의 파일이 아닌 경우, 해당 파일을 기기 내에 저장합니다. 추후 다운로드 없이 즉시 전송 가능합니다
+
+#### 반환값
+- `boolean`: 전송 성공 여부
+
+### `MediaSender.clearCache(target)`
+
+#### 매개변수
+- `target` (string|string[], 선택사항): 지정된 캐시 파일을 삭제합니다. 값이 빈 경우 모든 캐시를 삭제합니다
+
+
+## 지원하는 파일 형식
+
+### 이미지
+jpg, jpeg, gif, bmp, png, tif, tiff, tga, psd, ai
+
+### 동영상
+mp4, m4v, avi, asf, wmv, mkv, ts, mpg, mpeg, mov, flv, ogv
+
+### 음성
+mp3, wav, flac, tta, tak, aac, wma, ogg, m4a
+* 오디오 파일은 Multiple로 전송 시 첨부파일이 아닌 음성 메시지로 전송됩니다.
+
+### 문서
+doc, docx, hwp, txt, rtf, xml, pdf, wks, xps, md, odf, odt, ods, odp, csv, tsv, xls, xlsx, ppt, pptx, pages, key, numbers, show, ce
+
+### 압축파일
+zip, gz, bz2, rar, 7z, lzh, alz
+
+
 ## 버전 히스토리
+
+### v1.4.0 (2025.09.22)
+- Base64, ByteArray 입력 지원
+- 외부 데이터에 대한 캐싱 옵션 지원
+- 캐시 관련 설정 추가 (`MAX_CACHE_ITEMS`, `clearCache()`)
+- 파일 확장자 추출 시 간혹 발생하던 오류 수정
+- 0.7.36a 버전 호환
+- 성능 최적화 및 가독성 향상
 
 ### v1.3.1 (2025.07.25)
 - '다른 앱 위에 표시' 권한 확인 추가
@@ -57,70 +145,6 @@ MediaSender는 카카오톡 메시지봇에서 파일을 전송하기 위한 Jav
 ### v1.0.0 (2025.02.19)
 - 초기 버전
 
-## 설치 및 사용법
-
-### 1. 의존성
-```javascript
-const multiTask = require("multiTask");
-```
-
-### 2. 모듈 가져오기
-```javascript
-const MediaSender = require("mediaSender");
-```
-
-### 3. 사용 예시
-
-#### 단일 파일 전송
-```javascript
-// 로컬 파일 전송
-MediaSender.send(channelId, "sdcard/Pictures/image.jpg");
-
-// 온라인 파일 전송
-MediaSender.send(channelId, "https://example.com/image.jpg");
-```
-
-#### 다중 파일 전송
-```javascript
-const files = [
-    "sdcard/Pictures/image1.jpg",
-    "https://example.com/image2.jpg",
-    "sdcard/Documents/document.pdf"
-];
-MediaSender.send(channelId, files);
-```
-
-## API 참조
-
-### `MediaSender.send(channelId, path, timeout)`
-
-파일을 지정된 채널에 전송합니다.
-
-#### 매개변수
-- `channelId` (string|bigint): 전송할 채널 ID
-- `path` (string|string[]): 전송할 파일 경로 또는 파일 경로 배열
-- `timeout` (number, 선택사항): 다운로드 타임아웃 (기본값: 30000ms)
-
-#### 반환값
-- `boolean`: 전송 성공 여부
-
-## 지원하는 파일 형식
-
-### 이미지
-jpg, jpeg, gif, bmp, png, tif, tiff, tga, psd, ai
-
-### 동영상
-mp4, m4v, avi, asf, wmv, mkv, ts, mpg, mpeg, mov, flv, ogv
-
-### 음성
-mp3, wav, flac, tta, tak, aac, wma, ogg, m4a
-* 오디오 파일은 Multiple로 전송 시 첨부파일이 아닌 음성 메시지로 전송됩니다.
-
-### 문서
-doc, docx, hwp, txt, rtf, xml, pdf, wks, xps, md, odf, odt, ods, odp, csv, tsv, xls, xlsx, ppt, pptx, pages, key, numbers, show, ce
-
-### 압축파일
-zip, gz, bz2, rar, 7z, lzh, alz
 
 ## 라이선스
 
@@ -129,7 +153,3 @@ CC BY-NC-SA 4.0
 ## 작성자
 
 Hehee
-
-## 링크
-
-- [네이버 카페 - 메신저봇R](https://cafe.naver.com/nameyee) 
