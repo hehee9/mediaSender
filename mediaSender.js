@@ -5,11 +5,14 @@
  * @author Hehee
  * @license CC BY-NC-SA 4.0
  * @since 2025.02.19
- * @version 1.4.0
+ * @version 1.4.1
  */
 
 /**
  * @changeLog
+ * v1.4.1 (2025.10.05)
+ * - `return(packageName?: string): boolean` 추가
+ * 
  * v1.4.0 (2025.09.22)
  * - Base64, ByteArray 입력 지원
  * - 외부 데이터에 대한 캐싱 옵션 지원
@@ -1221,6 +1224,55 @@ MediaSender.send = (channelId, path, timeout, fileName, saveCache) => {
         }, 60000);
         return true;
 
+    } catch (e) {
+        Log.e(`${e.name}\n${e.message}\n${e.stack}`);
+        return false;
+    }
+};
+/**
+ * @description 카카오톡 전송 후 지정 앱 또는 홈 화면으로 복귀
+ * @param {string} [packageName] 이동할 앱의 패키지명, 미지정 시 홈 화면
+ * @param {number} [delay=5000] 복귀까지의 지연(ms)
+ * @returns {boolean} 스케줄링 성공 여부
+ */
+MediaSender.return = (packageName, delay) => {
+    try {
+        let ms = (typeof delay === "number" && delay >= 0) ? delay : 5000;
+
+        setTimeout(() => {
+            try {
+                let moved = false;
+
+                if (typeof packageName === "string" && packageName.length) {
+                    let pm = context.getPackageManager();
+                    let launch = pm ? pm.getLaunchIntentForPackage(packageName) : null;
+                    if (launch) {
+                        launch.addFlags(CONFIG.Intent.FLAG_ACTIVITY_NEW_TASK | CONFIG.Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                        context.startActivity(launch);
+                        moved = true;
+                    }
+                }
+
+                if (!moved) {
+                    let home = new CONFIG.Intent(CONFIG.Intent.ACTION_MAIN);
+                    home.addCategory(CONFIG.Intent.CATEGORY_HOME);
+                    home.setFlags(CONFIG.Intent.FLAG_ACTIVITY_NEW_TASK | CONFIG.Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    context.startActivity(home);
+                }
+            } catch (e) {
+                Log.e(`${e.name}\n${e.message}\n${e.stack}`);
+                try {
+                    let home = new CONFIG.Intent(CONFIG.Intent.ACTION_MAIN);
+                    home.addCategory(CONFIG.Intent.CATEGORY_HOME);
+                    home.setFlags(CONFIG.Intent.FLAG_ACTIVITY_NEW_TASK | CONFIG.Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    context.startActivity(home);
+                } catch (e2) {
+                    Log.e(`${e2.name}\n${e2.message}\n${e2.stack}`);
+                }
+            }
+        }, ms);
+
+        return true;
     } catch (e) {
         Log.e(`${e.name}\n${e.message}\n${e.stack}`);
         return false;

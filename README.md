@@ -62,11 +62,11 @@ MediaSender.send(channelId, files);
 파일을 지정된 채널에 전송합니다.
 
 #### 매개변수
-- `channelId` (string|bigint): 전송할 채널 ID
-- `path` (string|string[]): 전송할 파일 경로 또는 파일 경로 배열
-- `timeout` (number, 선택사항): 다운로드 타임아웃 (기본값: 30000ms)
-- `fileName` (string, 선택사항): 파일명을 지정합니다
-- `saveCache` (boolean, 선택사항): 내장 경로의 파일이 아닌 경우, 해당 파일을 기기 내에 저장합니다. 추후 다운로드 없이 즉시 전송 가능합니다
+- `channelId: string|bigint`: 전송할 채널 ID
+- `path: string|string[]`: 전송할 파일 경로 또는 파일 경로 배열
+- `timeout?: number`: 다운로드 타임아웃 (기본값: 30000ms)
+- `fileName?: string`: 파일명을 지정합니다
+- `saveCache?: boolean`: 내장 경로의 파일이 아닌 경우, 해당 파일을 기기 내에 저장합니다. 추후 다운로드 없이 즉시 전송 가능합니다
 
 #### 반환값
 - `boolean`: 전송 성공 여부
@@ -74,7 +74,13 @@ MediaSender.send(channelId, files);
 ### `MediaSender.clearCache(target)`
 
 #### 매개변수
-- `target` (string|string[], 선택사항): 지정된 캐시 파일을 삭제합니다. 값이 빈 경우 모든 캐시를 삭제합니다
+- `target?: string|string[]`: 지정된 캐시 파일을 삭제합니다. 값이 빈 경우 모든 캐시를 삭제합니다
+
+### `MediaSender.return(packageName, delay)`
+
+#### 매개변수
+- `packageName?: string|string[]`: 특정 앱, 미지정 시 홈 화면으로 이동합니다
+- `delay?: number = 5000`: 지정된 시간(ms) 후 동작합니다
 
 
 ## 지원하는 파일 형식
