@@ -5,11 +5,17 @@
  * @author Hehee
  * @license CC BY-NC-SA 4.0
  * @since 2025.02.19
- * @version 1.4.1
+ * @version 1.5.0
  */
 
 /**
  * @changeLog
+ * v1.5.0 (2025.12.24)
+ * - 메신저봇 0.7.40+ (Graal JS) 호환
+ *   - 폴더 변경
+ *   - Intent 설정 관련 호환성 문제 해결
+ * - 방 이름으로 전송할 채팅방 지정 가능
+ * 
  * v1.4.1 (2025.10.05)
  * - `return(packageName?: string): boolean` 추가
  * 
@@ -80,15 +86,16 @@ const CONFIG = {
     MediaScannerConnection: Packages.android.media.MediaScannerConnection,
     FileProvider: Packages.androidx.core.content.FileProvider,
     ArrayList: Packages.java.util.ArrayList,
-    Settings: Packages.android.provider.Settings
+    Settings: Packages.android.provider.Settings,
+    Bundle: Packages.android.os.Bundle
 };
 
 
 const FILE_PROVIDER_AUTHORITY = "com.xfl.msgbot.provider";
 
 
-const TMP_DIR = "sdcard/botData/tmp/";
-const CACHE_DIR = "sdcard/botData/mediaSender_cache/";
+const MEDIA_DIR = "sdcard/msgbot_media/";
+const CACHE_DIR = MEDIA_DIR + ".mediaSender_cache/";
 const CACHE_META_PATH = CACHE_DIR + "metadata.json";
 const MAX_CACHE_ITEMS = 200;
 
@@ -688,6 +695,27 @@ function _makeIndexedName(base, index) {
 }
 
 
+/**
+ * @description 보낼 방 -> channelId 해석
+ * @param {string|bigint|any} target 방 이름, channelId
+ * @returns {string|bigint|any|null} 변환된 channelId | null
+ */
+function _resolveChannelId(target) {
+    if (typeof target !== "string") return target;
+    if (/^\d+$/.test(target)) return target;
+
+    // roomName -> channelId
+    try {
+        const session = com.xfl.msgbot.application.notification.session.NotificationSession.INSTANCE;
+        const room = session.findRoomByName(target);
+        return room ? BigInt(room.id) : null;
+    } catch (e) {
+        Log.e(`${e.name}\n${e.message}\n${e.stack}`);
+        return null;
+    }
+}
+
+
 /* ==================== 메인 로직 ==================== */
 
 /**
@@ -1043,25 +1071,33 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
     // 로컬 파일 처리
     ext = ext || _getFileExtension(filePath);
     mime = _getMimeType(ext);
-    if (!new CONFIG.File(localPath).exists())
-        throw new Error("파일이 없음: " + localPath);
 
+    // msgbot_media 내부인지 확인
+    let underMediaDir = false;
+    if (typeof localPath === "string") {
+        underMediaDir = localPath.startsWith(MEDIA_DIR) || localPath.startsWith("/" + MEDIA_DIR);
+    }
+
+    // 확장자 보정
     let fileNameToUse = fileName ? (
         (_isValidFileName(fileName) ?
             (fileName.toLowerCase().endsWith("." + ext) ? fileName : (fileName + "." + ext)) :
             (() => { throw new Error("잘못된 파일명: " + fileName); })())
     ) : _getFileName(filePath);
 
-    let targetPath = folder + fileNameToUse;
-    if (localPath !== targetPath) {
-        let srcFile = new CONFIG.File(localPath);
-        let destFile = new CONFIG.File(targetPath);
-        let parentDir = destFile.getParentFile();
-        if (!parentDir.exists()) parentDir.mkdirs();
-        _copyFile(srcFile, destFile);
-        localPath = targetPath;
-        downloaded = true;
+    if (underMediaDir && !fileName) {
+        _scanMedia(localPath);
+        return { localPath, mime, downloaded: false };
     }
+
+    // 폴더 밖이거나 fileName 지정으로 복사 필요
+    let targetPath = folder + fileNameToUse;
+
+    let ok = FileStream.copyFile(localPath, targetPath);
+    if (!ok) throw new Error(`파일 복사 실패: ${localPath} -> ${targetPath}`);
+
+    localPath = targetPath;
+    downloaded = true; // 1분 뒤 삭제 대상
     _scanMedia(localPath);
     return { localPath, mime, downloaded };
 }
@@ -1078,6 +1114,8 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
 function _createSendIntent(action, channelId, mimeType, streamData) {
     let intent = new CONFIG.Intent(action);
     intent.setPackage("com.kakao.talk");
+    // GPT 왈: 뭔가 방이 잘 안 열린다면 주석을 해제해볼 것
+    // intent.setClassName("com.kakao.talk", "com.kakao.talk.activity.ShareReceiverActivity");
     intent.setType(mimeType);
 
     const extraKey = CONFIG.Intent.EXTRA_STREAM;
@@ -1087,11 +1125,18 @@ function _createSendIntent(action, channelId, mimeType, streamData) {
         intent.putExtra(extraKey, streamData);
     }
 
-    let channelIdLong = new CONFIG.Long(channelId.toString());
-    intent.putExtra("key_id", channelIdLong);
-    intent.putExtra("key_type", new CONFIG.Integer(1));
-    intent.putExtra("key_from_direct_share", true);
-    intent.addFlags(CONFIG.Intent.FLAG_ACTIVITY_NEW_TASK | CONFIG.Intent.FLAG_ACTIVITY_CLEAR_TOP | CONFIG.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    let b = new CONFIG.Bundle();
+    b.putLong("key_id", CONFIG.Long.parseLong(channelId.toString()));
+    b.putInt("key_type", 1);
+    b.putBoolean("key_from_direct_share", true);
+    intent.putExtras(b);
+
+    intent.addFlags(
+        CONFIG.Intent.FLAG_ACTIVITY_NEW_TASK |
+        CONFIG.Intent.FLAG_ACTIVITY_CLEAR_TOP |
+        CONFIG.Intent.FLAG_GRANT_READ_URI_PERMISSION
+    );
+
     return intent;
 }
 
@@ -1115,7 +1160,14 @@ const MediaSender = {};
  */
 MediaSender.send = (channelId, path, timeout, fileName, saveCache) => {
     try {
-        let folder = TMP_DIR;
+        // channelId 대신 방 이름이 들어온 경우를 위해
+        let resolved = _resolveChannelId(channelId);
+        if (resolved === null || typeof resolved === "undefined") {
+            throw new Error("channelId/roomName 해석 실패: " + channelId);
+        }
+        channelId = resolved;
+
+        let folder = MEDIA_DIR;
         timeout = timeout || 30000;
         let downloadedFiles = [];
 
@@ -1278,12 +1330,12 @@ MediaSender.return = (packageName, delay) => {
         return false;
     }
 };
- /**
+/**
  * @description 캐시 삭제
  * @param {string|string[]} [target] 없음: 전체 삭제, 문자열: 해당 파일/키 삭제, 문자열 배열: 여러 개 삭제
  * @returns {boolean} 성공 여부
  */
- MediaSender.clearCache = (target) => {
+MediaSender.clearCache = (target) => {
     try {
         _ensureCacheDir();
         let meta = _loadCacheMeta();

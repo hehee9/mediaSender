@@ -22,6 +22,7 @@ MediaSender는 카카오톡 메시지봇에서 파일을 전송하기 위한 Jav
 
 ### 1. 의존성 (추천, 필수 아님)
 ```javascript
+/** @see https://cafe.naver.com/nameyee/50218 */
 const multiTask = require("multiTask");
 ```
 
@@ -103,6 +104,15 @@ zip, gz, bz2, rar, 7z, lzh, alz
 
 
 ## 버전 히스토리
+
+### v1.5.0 (2025.12.24)
+ - 메신저봇 0.7.40+ (Graal JS) 호환
+   - 폴더 변경
+   - Intent 설정 관련 호환성 문제 해결
+ - 방 이름으로 전송할 채팅방 지정 가능
+
+### v1.4.1 (2025.10.05)
+ - `return(packageName?: string): boolean` 추가
 
 ### v1.4.0 (2025.09.22)
 - Base64, ByteArray 입력 지원
