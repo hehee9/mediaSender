@@ -228,7 +228,7 @@ const context = _getContext();
 /** @see https://cafe.naver.com/nameyee/50218 */
 let multiTask = null;
 try {
-    multiTask = require("multiTask");
+    multiTask = require("shared/multiTask");
 } catch (e) {
     Log.e(`multiTask 모듈 설치를 권장합니다.\nhttps://cafe.naver.com/nameyee/50218`);
 }
@@ -1093,8 +1093,12 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
     // 폴더 밖이거나 fileName 지정으로 복사 필요
     let targetPath = folder + fileNameToUse;
 
-    let ok = FileStream.copyFile(localPath, targetPath);
-    if (!ok) throw new Error(`파일 복사 실패: ${localPath} -> ${targetPath}`);
+    let srcFile = new CONFIG.File(localPath);
+    let destFile = new CONFIG.File(targetPath);
+    let parentDir = destFile.getParentFile();
+    if (!parentDir.exists()) parentDir.mkdirs();
+
+    _copyFile(srcFile, destFile);
 
     localPath = targetPath;
     downloaded = true; // 1분 뒤 삭제 대상
@@ -1172,7 +1176,7 @@ MediaSender.send = (channelId, path, timeout, fileName, saveCache) => {
         let downloadedFiles = [];
 
         // 복수 파일
-        if (Array.isArray(path)) {
+        if (Array.isArray(path) && !_isJavaByteArray(path)) {
             let uniquePaths = [];
             let mapIndex = [];
             let cacheMap = Object.create(null);
