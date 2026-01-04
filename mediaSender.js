@@ -5,11 +5,18 @@
  * @author Hehee
  * @license CC BY-NC-SA 4.0
  * @since 2025.02.19
- * @version 1.5.0
+ * @version 1.5.1
  */
 
 /**
  * @changeLog
+ * v1.5.1 (2026.01.04)
+ * - 각종 효율성 개선
+ *   - 다중 파일 전송 시 메타데이터 I/O 감소 (N회 → 1회)
+ *   - SHA-256 Hex 변환 최적화 (O(n²) → O(n))
+ *   - Java byte[] 판별 최적화 (fast path 우선)
+ *   - 파일 시그니처 매칭 최적화 (첫 바이트 인덱싱)
+ *
  * v1.5.0 (2025.12.24)
  * - 메신저봇 0.7.40+ (Graal JS) 호환
  *   - 폴더 변경
@@ -183,6 +190,21 @@ const SIGNATURES = [
     { exts: ['flac'], sig: [0x66, 0x4C, 0x61, 0x43] },
     { exts: ['aac'], sig: [0xFF, 0xF1] }
 ];
+const SIGNATURE_INDEX = (() => {
+    let index = Object.create(null);
+    let withOffset = [];
+    for (let type of SIGNATURES) {
+        let offset = type.offset || 0;
+        if (offset === 0 && type.sig.length > 0) {
+            let firstByte = type.sig[0];
+            (index[firstByte] || (index[firstByte] = [])).push(type);
+        } else {
+            withOffset.push(type);
+        }
+    }
+    index._withOffset = withOffset;
+    return index;
+})();
 const MIME_TO_EXT = (() => {
     let m = {};
     for (let k in MIME_MAP) {
@@ -346,10 +368,62 @@ function _saveCacheMeta(meta) {
         Log.e(`${e.name}\n${e.message}\n${e.stack}`);
     }
 }
+/**
+ * @description 배치 처리용 공유 메타 컨텍스트
+ * @param {Function} fn 실행할 함수 (meta를 인자로 받음)
+ * @returns {any} fn의 반환값
+ */
+function _withSharedMeta(fn) {
+    _ensureCacheDir();
+    let meta = _loadCacheMeta();
+    let result = fn(meta);
+    _evictIfNeeded(meta);
+    _saveCacheMeta(meta);
+    return result;
+}
+/**
+ * @description 캐시 조회 (메타 공유 버전)
+ * @param {object} meta 공유 메타데이터
+ * @param {string} key 캐시 키
+ * @returns {object|null} 캐시 엔트리
+ */
+function _getCacheEntry(meta, key) {
+    return meta.items[key] || null;
+}
+/**
+ * @description 캐시 업데이트 (메타 공유 버전, 저장은 나중에)
+ * @param {object} meta 공유 메타데이터
+ * @param {object} update 업데이트 내용
+ */
+function _updateCacheEntry(meta, update) {
+    if (!update || !update.key) return;
+    let cur = meta.items[update.key] || {};
+    if (update.file) cur.file = update.file;
+    if (update.mime) cur.mime = update.mime;
+    if (update.ext) cur.ext = update.ext;
+    cur.lastUsed = Math.max(cur.lastUsed || 0, update.lastUsed || Date.now());
+    if (typeof update.size === "number" && update.size > 0) cur.size = update.size;
+    meta.items[update.key] = cur;
+}
 
 
 /* ==================== 연산 헬퍼 ==================== */
 
+const HEX_CHARS = "0123456789abcdef";
+/**
+ * @description byte[]를 hex 문자열로 변환 (O(n))
+ * @param {byte[]} digest 바이트 배열
+ * @returns {string} hex 문자열
+ */
+function _bytesToHex(digest) {
+    let arr = new Array(digest.length * 2);
+    for (let i = 0; i < digest.length; i++) {
+        let b = digest[i] & 0xFF;
+        arr[i * 2] = HEX_CHARS.charAt(b >>> 4);
+        arr[i * 2 + 1] = HEX_CHARS.charAt(b & 0x0F);
+    }
+    return arr.join("");
+}
 /**
  * @description SHA-256 해시
  * @param {string} input 해시할 문자열
@@ -365,15 +439,7 @@ function _sha256(input) {
     let md = MessageDigest.getInstance("SHA-256");
     let bytes = new java.lang.String(input).getBytes(UTF8);
     md.update(bytes);
-    let digest = md.digest();
-    let hex = "";
-    for (let i = 0; i < digest.length; i++) {
-        let b = digest[i] & 0xFF;
-        let h = b.toString(16);
-        if (h.length < 2) hex += "0";
-        hex += h;
-    }
-    return hex;
+    return _bytesToHex(md.digest());
 }
 /**
  * @description SHA-256 해시 (raw byte[] + 접두부 바이트)
@@ -386,15 +452,7 @@ function _sha256BytesWithPrefix(prefixBytes, bytes) {
     let md = MessageDigest.getInstance("SHA-256");
     if (prefixBytes && prefixBytes.length) md.update(prefixBytes);
     md.update(bytes);
-    let digest = md.digest();
-    let hex = "";
-    for (let i = 0; i < digest.length; i++) {
-        let b = digest[i] & 0xFF;
-        let h = b.toString(16);
-        if (h.length < 2) hex += "0";
-        hex += h;
-    }
-    return hex;
+    return _bytesToHex(md.digest());
 }
 
 
@@ -461,18 +519,23 @@ function _evictIfNeeded(meta) {
  * @returns {boolean}
  */
 function _isJavaByteArray(x) {
+    if (!x) return false;
+
+    // 가장 빠른 체크: toString 패턴
     try {
-        if (!x) return false;
-
-        let cls = x.getClass ? x.getClass() : null;
-        if (cls && cls.isArray && cls.isArray()) {
-            let comp = cls.getComponentType ? cls.getComponentType() : null;
-            if (comp && comp.getName && comp.getName() === "byte") return true;
-        }
-
         let s = "" + x;
-        if (typeof s === "string" && s.startsWith("[B@")) return true;
+        if (s.startsWith("[B@")) return true;
     } catch (_) { }
+
+    // 정확한 체크 (위에서 실패한 경우만)
+    try {
+        let cls = x.getClass && x.getClass();
+        if (cls && cls.isArray()) {
+            let comp = cls.getComponentType();
+            return comp && comp.getName() === "byte";
+        }
+    } catch (_) { }
+
     return false;
 }
 /**
@@ -534,43 +597,53 @@ function _decodeBase64Flexible(b64) {
     }
 }
 /**
- * @description byte[]로 확장자 추측
+ * @description 시그니처 매칭 헬퍼
+ * @param {byte[]} bytes 바이너리 데이터
+ * @param {object} type 시그니처 정의
+ * @returns {boolean} 매칭 여부
+ */
+function _matchSignature(bytes, type) {
+    let sig = type.sig;
+    let offset = type.offset || 0;
+
+    if (bytes.length < offset + sig.length) return false;
+
+    for (let j = 0; j < sig.length; j++) {
+        if ((bytes[offset + j] & 0xFF) !== sig[j]) return false;
+    }
+
+    // secondary signature 체크 (AVI, WAV 등 RIFF 기반)
+    if (type.secondarySig) {
+        let secOff = type.secondaryOffset || 0;
+        let secSig = type.secondarySig;
+        if (bytes.length < secOff + secSig.length) return false;
+        for (let k = 0; k < secSig.length; k++) {
+            if ((bytes[secOff + k] & 0xFF) !== secSig[k]) return false;
+        }
+    }
+    return true;
+}
+/**
+ * @description byte[]로 확장자 추측 (첫 바이트 인덱싱 최적화)
  * @param {byte[]} bytes 바이너리 데이터
  * @returns {string|null} 매칭되는 파일 확장자 | null
  */
 function _guessFileTypeFromBytes(bytes) {
     if (!bytes || bytes.length === 0) return null;
-    
-    for (let type of SIGNATURES) {
-        let sig = type.sig;
-        let offset = type.offset || 0;
-        let secondarySig = type.secondarySig;
-        let secondaryOffset = type.secondaryOffset || 0;
 
-        if (bytes.length < offset + sig.length) continue;
-        let primaryMatch = true;
-        for (let j = 0; j < sig.length; j++) {
-            if ((bytes[offset + j] & 0xFF) !== sig[j]) {
-                primaryMatch = false;
-                break;
-            }
-        }
-        if (primaryMatch) {
-            if (secondarySig) {
-                if (bytes.length < secondaryOffset + secondarySig.length) continue;
-                let secondaryMatch = true;
-                for (let k = 0; k < secondarySig.length; k++) {
-                    if ((bytes[secondaryOffset + k] & 0xFF) !== secondarySig[k]) {
-                        secondaryMatch = false;
-                        break;
-                    }
-                }
-                if (secondaryMatch) return type.exts[0];
-            } else {
-                return type.exts[0];
-            }
-        }
+    let firstByte = bytes[0] & 0xFF;
+    let candidates = SIGNATURE_INDEX[firstByte] || [];
+
+    // 1. 첫 바이트 매칭 후보 검사
+    for (let type of candidates) {
+        if (_matchSignature(bytes, type)) return type.exts[0];
     }
+
+    // 2. offset이 있는 시그니처 검사 (webp, lzh, mp4 등)
+    for (let type of SIGNATURE_INDEX._withOffset) {
+        if (_matchSignature(bytes, type)) return type.exts[0];
+    }
+
     return null;
 }
 /**
@@ -782,9 +855,10 @@ function _scanMedia(path) {
  * @param {number} [index] 파일명 중복 방지용 인덱스
  * @param {string} [fileName] 저장할 파일명(옵션)
  * @param {boolean} [saveCache=false] 캐시 사용 여부
+ * @param {object} [sharedMeta] 공유 메타데이터 (배치 처리용)
  * @returns {object}
  */
-function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
+function _prepareFile(filePath, folder, timeout, index, fileName, saveCache, sharedMeta) {
     let localPath = filePath;
     let ext = "";
     let mime = "";
@@ -806,10 +880,13 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
         }
 
         if (saveCache) {
-            _ensureCacheDir();
+            if (!sharedMeta) _ensureCacheDir();
             let key = _computeKeyFromBytes(bytes);
-            let meta = _loadCacheMeta();
-            let entry = meta.items[key];
+            let entry = sharedMeta ? _getCacheEntry(sharedMeta, key) : null;
+            if (!entry && !sharedMeta) {
+                let meta = _loadCacheMeta();
+                entry = meta.items[key];
+            }
 
             let cacheFileName = (entry && entry.file) ? entry.file : (key + "." + ext);
             let cachePath = _makeCacheFilePathByName(cacheFileName);
@@ -831,6 +908,8 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
                 size: outFile.exists() ? outFile.length() : (bytes ? bytes.length : 0)
             };
 
+            if (sharedMeta) _updateCacheEntry(sharedMeta, metaUpdate);
+
             if (customFileName) {
                 localPath = folder + customFileName;
                 let destFile = new CONFIG.File(localPath);
@@ -844,7 +923,7 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
                 downloaded = false;
             }
 
-            return { localPath, mime, downloaded, metaUpdate };
+            return sharedMeta ? { localPath, mime, downloaded } : { localPath, mime, downloaded, metaUpdate };
         }
 
         // 캐시 미사용: tmp에 저장
@@ -927,11 +1006,14 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
         }
 
         if (saveCache) {
-            _ensureCacheDir();
+            if (!sharedMeta) _ensureCacheDir();
 
             let key = _computeKeyFromBytes(bytes);
-            let meta = _loadCacheMeta();
-            let entry = meta.items[key];
+            let entry = sharedMeta ? _getCacheEntry(sharedMeta, key) : null;
+            if (!entry && !sharedMeta) {
+                let meta = _loadCacheMeta();
+                entry = meta.items[key];
+            }
 
             let cacheFileName = (entry && entry.file) ? entry.file : (key + "." + ext);
             let cachePath = _makeCacheFilePathByName(cacheFileName);
@@ -953,6 +1035,8 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
                 size: outFile.exists() ? outFile.length() : (bytes ? bytes.length : 0)
             };
 
+            if (sharedMeta) _updateCacheEntry(sharedMeta, metaUpdate);
+
             if (customFileName) {
                 localPath = folder + customFileName;
                 let destFile = new CONFIG.File(localPath);
@@ -966,7 +1050,7 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
                 downloaded = false;
             }
 
-            return { localPath, mime, downloaded, metaUpdate };
+            return sharedMeta ? { localPath, mime, downloaded } : { localPath, mime, downloaded, metaUpdate };
         }
 
         // 캐시 미사용: tmp에 저장
@@ -994,10 +1078,13 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
         mime = _getMimeType(ext);
 
         if (saveCache) {
-            _ensureCacheDir();
+            if (!sharedMeta) _ensureCacheDir();
             let key = _computeKeyFromUrl(filePath);
-            let meta = _loadCacheMeta();
-            let entry = meta.items[key];
+            let entry = sharedMeta ? _getCacheEntry(sharedMeta, key) : null;
+            if (!entry && !sharedMeta) {
+                let meta = _loadCacheMeta();
+                entry = meta.items[key];
+            }
             if (entry) {
                 ext = entry.ext || ext;
                 mime = entry.mime || mime;
@@ -1023,6 +1110,8 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
                 size: cacheFile.exists() ? cacheFile.length() : 0
             };
 
+            if (sharedMeta) _updateCacheEntry(sharedMeta, metaUpdate);
+
             let customFileName = null;
             if (fileName) {
                 if (!_isValidFileName(fileName)) throw new Error("잘못된 파일명: " + fileName);
@@ -1041,7 +1130,7 @@ function _prepareFile(filePath, folder, timeout, index, fileName, saveCache) {
                 localPath = cachePath;
                 downloaded = false;
             }
-            return { localPath, mime, downloaded, metaUpdate };
+            return sharedMeta ? { localPath, mime, downloaded } : { localPath, mime, downloaded, metaUpdate };
         }
 
         // 캐시 미사용
@@ -1206,17 +1295,25 @@ MediaSender.send = (channelId, path, timeout, fileName, saveCache) => {
                     tasks.push([_prepareFile, uniquePaths[j], folder, timeout, j, fileNameForThis, saveCache]);
                 }
                 uniqueResults = multiTask.run(tasks, timeout);
+            } else if (saveCache) {
+                // 동기 + 캐시: 공유 메타로 I/O 최소화
+                _withSharedMeta((meta) => {
+                    for (let j = 0; j < uniquePaths.length; j++) {
+                        let fileNameForThis = (typeof fileName === "string" && fileName.length) ? _makeIndexedName(fileName, j + 1) : undefined;
+                        uniqueResults.push(_prepareFile(uniquePaths[j], folder, timeout, j, fileNameForThis, saveCache, meta));
+                    }
+                });
             } else {
                 for (let j = 0; j < uniquePaths.length; j++) {
                     let fileNameForThis = (typeof fileName === "string" && fileName.length) ? _makeIndexedName(fileName, j + 1) : undefined;
                     uniqueResults.push(_prepareFile(uniquePaths[j], folder, timeout, j, fileNameForThis, saveCache));
                 }
             }
-            
+
             let results = [];
             for (let i = 0; i < path.length; i++) {
                 results.push(uniqueResults[mapIndex[i]]);
-           }
+            }
 
             let uriList = new CONFIG.ArrayList();
             for (let result of results) {
@@ -1231,14 +1328,17 @@ MediaSender.send = (channelId, path, timeout, fileName, saveCache) => {
             let intent = _createSendIntent(CONFIG.Intent.ACTION_SEND_MULTIPLE, channelId, "*/*", uriList);
             context.startActivity(intent);
 
-            try {
-                let updates = [];
-                for (let result of uniqueResults) {
-                    if (result && result.metaUpdate) updates.push(result.metaUpdate);
+            // multiTask 사용 시에만 metaUpdate 병합 필요 (sharedMeta 미사용)
+            if (multiTask) {
+                try {
+                    let updates = [];
+                    for (let result of uniqueResults) {
+                        if (result && result.metaUpdate) updates.push(result.metaUpdate);
+                    }
+                    if (updates.length > 0) _applyMetaUpdates(updates);
+                } catch (e) {
+                    Log.e(`${e.name}\n${e.message}\n${e.stack}`);
                 }
-                if (updates.length > 0) _applyMetaUpdates(updates);
-            } catch (e) {
-                Log.e(`${e.name}\n${e.message}\n${e.stack}`);
             }
         }
         
